@@ -1,0 +1,22 @@
+services:
+  user-service:
+    url: http://${USER_SERVICE_HOST:user-service}:8082
+  onboarding-service:
+    url: http://${ONBOARDING_SERVICE_HOST:onboarding-service}:8081
+  tenant-service:
+    url: http://${TENANT_SERVICE_HOST:tenant-service}:8083
+
+spring:
+  data:
+    redis:
+      host: ${REDIS_HOST:redis}
+      port: ${REDIS_PORT:6379}
+
+cors:
+  allowed-origins:
+    - ${FRONTEND_URL:http://localhost:4200}
+
+logging:
+  level:
+    org.saas.gateway: INFO
+    org.springframework.cloud.gateway: WARN

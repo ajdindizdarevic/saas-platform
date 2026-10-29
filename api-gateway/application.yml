@@ -1,0 +1,171 @@
+spring:
+  application:
+    name: api-gateway
+
+  cloud:
+    gateway:
+      # ── Global default filters applied to every route ─────────────────────
+      default-filters:
+        - DedupeResponseHeader=Access-Control-Allow-Credentials Access-Control-Allow-Origin
+        - name: RequestRateLimiter
+          args:
+            redis-rate-limiter.replenishRate: 50
+            redis-rate-limiter.burstCapacity: 100
+            redis-rate-limiter.requestedTokens: 1
+
+      # ── Declarative routes ────────────────────────────────────────────────
+      routes:
+
+        # ── user-service: auth ──────────────────────────────────────────────
+        - id: user-auth
+          uri: ${services.user-service.url}
+          predicates:
+            - Path=/api/v1/auth/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: userServiceCB
+                fallbackUri: forward:/fallback/user-service
+            - name: Retry
+              args:
+                retries: 2
+                statuses: BAD_GATEWAY,SERVICE_UNAVAILABLE
+                methods: GET,POST
+                backoff:
+                  firstBackoff: 100ms
+                  maxBackoff: 500ms
+
+        # ── user-service: users ─────────────────────────────────────────────
+        - id: user-service-users
+          uri: ${services.user-service.url}
+          predicates:
+            - Path=/api/v1/users/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: userServiceCB
+                fallbackUri: forward:/fallback/user-service
+
+        # ── onboarding-service: public submission ───────────────────────────
+        - id: onboarding-public
+          uri: ${services.onboarding-service.url}
+          predicates:
+            - Path=/api/v1/onboarding
+            - Method=POST
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: onboardingServiceCB
+                fallbackUri: forward:/fallback/onboarding-service
+
+        # ── onboarding-service: authenticated operations ────────────────────
+        - id: onboarding-authenticated
+          uri: ${services.onboarding-service.url}
+          predicates:
+            - Path=/api/v1/onboarding/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: onboardingServiceCB
+                fallbackUri: forward:/fallback/onboarding-service
+
+        # ── onboarding-service: admin ───────────────────────────────────────
+        - id: onboarding-admin
+          uri: ${services.onboarding-service.url}
+          predicates:
+            - Path=/api/v1/admin/onboarding/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: onboardingServiceCB
+                fallbackUri: forward:/fallback/onboarding-service
+
+        # ── tenant-service ──────────────────────────────────────────────────
+        - id: tenant-service
+          uri: ${services.tenant-service.url}
+          predicates:
+            - Path=/api/v1/tenants/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: tenantServiceCB
+                fallbackUri: forward:/fallback/tenant-service
+
+      # ── Global CORS (also handled by CorsConfig.java) ─────────────────────
+      globalcors:
+        add-to-simple-url-handler-mapping: true
+
+  # ── Redis (for rate limiting) ─────────────────────────────────────────────
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+
+server:
+  port: 8080
+
+# ── JWT ───────────────────────────────────────────────────────────────────────
+jwt:
+  secret: ${JWT_SECRET:your-256-bit-secret-key-here-for-development-only}
+  expiration: 86400000   # 24h (ms) – informational only; gateway does not issue tokens
+
+# ── Downstream service URLs ───────────────────────────────────────────────────
+services:
+  user-service:
+    url: http://localhost:8082
+  onboarding-service:
+    url: http://localhost:8081
+  tenant-service:
+    url: http://localhost:8083
+
+# ── CORS allowed origins ──────────────────────────────────────────────────────
+cors:
+  allowed-origins: "http://localhost:4200"
+
+# ── Resilience4j circuit breakers ────────────────────────────────────────────
+resilience4j:
+  circuitbreaker:
+    instances:
+      userServiceCB:
+        slidingWindowSize: 10
+        minimumNumberOfCalls: 5
+        failureRateThreshold: 50
+        waitDurationInOpenState: 10s
+        permittedNumberOfCallsInHalfOpenState: 3
+      onboardingServiceCB:
+        slidingWindowSize: 10
+        minimumNumberOfCalls: 5
+        failureRateThreshold: 50
+        waitDurationInOpenState: 10s
+      tenantServiceCB:
+        slidingWindowSize: 10
+        minimumNumberOfCalls: 5
+        failureRateThreshold: 50
+        waitDurationInOpenState: 10s
+  timelimiter:
+    instances:
+      userServiceCB:
+        timeoutDuration: 5s
+      onboardingServiceCB:
+        timeoutDuration: 5s
+      tenantServiceCB:
+        timeoutDuration: 5s
+
+# ── Actuator ──────────────────────────────────────────────────────────────────
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,gateway
+  endpoint:
+    health:
+      show-details: when-authorized
+    gateway:
+      enabled: true
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+logging:
+  level:
+    org.saas.gateway: INFO
+    org.springframework.cloud.gateway: WARN
+    reactor.netty: WARN
